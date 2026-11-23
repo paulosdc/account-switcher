@@ -43,6 +43,68 @@ Describe 'Clear-ParentSessionEnv' {
     }
 }
 
+Describe 'Clear-ParentSessionEnv outside CLAUDE*' {
+    It 'drops NO_COLOR and the GIT_* variables the parent session sets, so the new window opens with color' {
+        $names = 'NO_COLOR', 'GIT_TERMINAL_PROMPT', 'GIT_EDITOR', 'GIT_ASKPASS'
+        $saved = @{}
+        foreach ($n in $names) { $saved[$n] = [Environment]::GetEnvironmentVariable($n, 'Process') }
+        try {
+            $cc = $env:CLAUDECODE
+            $env:CLAUDECODE = '1'
+            foreach ($n in $names) { Set-Item "Env:$n" '1' }
+            $dropped = Clear-ParentSessionEnv @()
+            foreach ($n in $names) {
+                [Environment]::GetEnvironmentVariable($n, 'Process') | Should Be $null
+                ($dropped -contains $n) | Should Be $true
+            }
+        } finally {
+            foreach ($n in $names) { [Environment]::SetEnvironmentVariable($n, $saved[$n], 'Process') }
+            [Environment]::SetEnvironmentVariable('CLAUDECODE', $cc, 'Process')
+        }
+    }
+
+    It 'drops an inherited empty GIT_ASKPASS without an error' {
+        $common = Join-Path $PSScriptRoot '..\plugins\account-switcher\skills\account-switcher\scripts\common.ps1'
+        $psi = New-Object Diagnostics.ProcessStartInfo 'powershell.exe'
+        $psi.Arguments = "-NoProfile -Command `". '$common'; `$null = Clear-ParentSessionEnv @(); " +
+            "if (Test-Path Env:GIT_ASKPASS) { 'stayed' } else { 'gone' }`""
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.EnvironmentVariables['GIT_ASKPASS'] = ''
+        $psi.EnvironmentVariables['CLAUDECODE'] = '1'
+        $p = [Diagnostics.Process]::Start($psi)
+        $out = $p.StandardOutput.ReadToEnd()
+        $err = $p.StandardError.ReadToEnd()
+        $p.WaitForExit()
+        $out.Trim() | Should Be 'gone'
+        $err | Should BeNullOrEmpty
+    }
+
+    It 'outside a Claude session, keeps NO_COLOR (cc typed in the user's own shell)' {
+        $antes, $cc = $env:NO_COLOR, $env:CLAUDECODE
+        try {
+            Remove-Item Env:CLAUDECODE -ErrorAction SilentlyContinue
+            $env:NO_COLOR = '1'
+            $null = Clear-ParentSessionEnv @()
+            $env:NO_COLOR | Should Be '1'
+        } finally {
+            [Environment]::SetEnvironmentVariable('NO_COLOR', $antes, 'Process')
+            [Environment]::SetEnvironmentVariable('CLAUDECODE', $cc, 'Process')
+        }
+    }
+
+    It 'keeps NO_COLOR when the user set it in their own environment (User/Machine)' {
+        $antes = $env:NO_COLOR
+        try {
+            $env:NO_COLOR = '1'
+            $dropped = Clear-ParentSessionEnv @('NO_COLOR')
+            $env:NO_COLOR | Should Be '1'
+            ($dropped -contains 'NO_COLOR') | Should Be $false
+        } finally { [Environment]::SetEnvironmentVariable('NO_COLOR', $antes, 'Process') }
+    }
+}
+
 Describe 'Repair-SessionTemp' {
     It 'replaces TMP and TEMP that point to the Windows folder with the user temp' {
         $tmp, $temp = $env:TMP, $env:TEMP

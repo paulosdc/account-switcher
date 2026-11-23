@@ -181,18 +181,28 @@ function Invoke-WithAccount($account, [scriptblock]$block) {
 # A cc run from inside a Claude session (open-account.ps1, "!" in the prompt) inherits that session's
 # CLAUDE* variables; with CLAUDE_CODE_CHILD_SESSION the new session neither saves a transcript nor shows
 # up in ListAgents. Drops those, except CLAUDE_CONFIG_DIR (cc controls it itself) and the ones the user
-# set in their own environment (User/Machine), such as CLAUDE_CODE_GIT_BASH_PATH. Returns the names dropped.
+# set in their own environment (User/Machine), such as CLAUDE_CODE_GIT_BASH_PATH. Called from inside a
+# session (CLAUDECODE) it also drops NO_COLOR (the new window would open without color) and the GIT_*
+# variables the session sets for its own commands. Returns the names dropped.
+# shortcut: a persistent one with another value in the process keeps the parent's value; restore the User/Machine one if that bothers.
+$script:ParentSessionNames = 'NO_COLOR', 'GIT_TERMINAL_PROMPT', 'GIT_EDITOR', 'GIT_ASKPASS'
+
 function Get-PersistentClaudeNames {
     foreach ($scope in 'User', 'Machine') {
-        [Environment]::GetEnvironmentVariables($scope).Keys | Where-Object { "$_" -like 'CLAUDE*' }
+        [Environment]::GetEnvironmentVariables($scope).Keys | Where-Object {
+            "$_" -like 'CLAUDE*' -or $script:ParentSessionNames -contains "$_"
+        }
     }
 }
 
 function Clear-ParentSessionEnv([string[]]$persistent = @(Get-PersistentClaudeNames)) {
+    $fromSession = Test-Path Env:CLAUDECODE
     Get-ChildItem Env: | Where-Object {
-        $_.Name -like 'CLAUDE*' -and $_.Name -ne 'CLAUDE_CONFIG_DIR' -and $persistent -notcontains $_.Name
+        (($_.Name -like 'CLAUDE*' -and $_.Name -ne 'CLAUDE_CONFIG_DIR') -or
+         ($fromSession -and $script:ParentSessionNames -contains $_.Name)) -and $persistent -notcontains $_.Name
     } | ForEach-Object {
-        Remove-Item "Env:$($_.Name)"
+        # Remove-Item does not find an inherited empty variable (GIT_ASKPASS=)
+        [Environment]::SetEnvironmentVariable($_.Name, $null, 'Process')
         $_.Name
     }
 }
