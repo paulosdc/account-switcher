@@ -526,7 +526,9 @@ function Get-AppPathsKey([string]$shortcut) { "HKCU:\Software\Microsoft\Windows\
 $Script:LegacyTopKeys = [ordered]@{ principal = 'main'; padrao = 'default'; publicar = 'publish'
                                     atalhoExplorer = 'explorerShortcut'; chrome = 'chrome'; avisoUso = 'usageWarning'; contas = 'accounts' }
 $Script:LegacyAccountKeys = [ordered]@{ email = 'email'; pasta = 'dir'; rc = 'rc' }
-$Script:LegacyScripts = @('comum.ps1', 'instalar.ps1', 'setup-contas.ps1', 'desfazer-contas.ps1', 'abrir-conta.ps1',
+# instalar.ps1, setup-contas.ps1, desfazer-contas.ps1 and abrir-conta.ps1 are not here: they stay as thin
+# shims that forward to the new scripts (other tools call them), so install.ps1 overwrites them instead.
+$Script:LegacyScripts = @('comum.ps1',
                           'contas.exemplo.json', 'modelo-CLAUDE.md', 'explorer\claude-aqui.cmd', 'explorer\claude-aqui.ps1',
                           'rc\ligado.json', 'rc\desligado.json', 'cc.ps1.desativado')
 $Script:LegacyBlockBegin = '<!-- account-switcher:inicio -->'
@@ -540,6 +542,40 @@ function Get-LegacyConfigPath {
         if (Test-Path -LiteralPath $f) { return $f }
     }
     $null
+}
+
+# The old folder name is kept as a junction to the new folder: Claude records absolute paths through the
+# account folders (installed_plugins.json, known_marketplaces.json) and they keep resolving.
+function Test-LegacyJunction {
+    $i = Get-Item -LiteralPath $LegacyBaseDir -Force -ErrorAction SilentlyContinue
+    return [bool]($i -and $i.LinkType)
+}
+
+# Both a real old folder and the new folder exist: the installer cannot tell which one holds the logins.
+function Test-LegacyBothFolders {
+    (Test-Path -LiteralPath $LegacyBaseDir) -and -not (Test-LegacyJunction) -and (Test-Path -LiteralPath $BaseDir)
+}
+
+# Processes of Claude Code that are not the one this script runs under (an idle session holds no handle in
+# the folder, so a failing rename is not enough to find them). The ancestors are skipped on purpose: the
+# installer is often run BY a Claude session, and with the junction in place that one keeps working.
+function Get-ParentProcessIds {
+    $ids = @($PID)
+    try {
+        $id = $PID
+        for ($n = 0; $n -lt 20; $n++) {
+            $p = Get-CimInstance Win32_Process -Filter "ProcessId=$id" -ErrorAction Stop
+            if (-not $p -or -not $p.ParentProcessId -or $p.ParentProcessId -eq $id) { break }
+            $id = [int]$p.ParentProcessId
+            $ids += $id
+        }
+    } catch { }
+    $ids
+}
+
+function Get-RunningClaudeProcesses {
+    $skip = @(Get-ParentProcessIds)
+    @(Get-Process -Name claude -ErrorAction SilentlyContinue | Where-Object { $skip -notcontains $_.Id })
 }
 
 # What is left to migrate, as a list of short descriptions (empty = nothing).
@@ -593,6 +629,9 @@ function Convert-LegacyAccountsJson([string]$text) {
 function Move-LegacyInstall {
     $msgs = @()
     if (-not (Test-LegacyInstall)) { return $msgs }
+    if (Test-LegacyBothFolders) {
+        throw "Both $LegacyBaseDir and $BaseDir exist, so nothing was migrated and nothing was changed. Move or delete $BaseDir (it should only hold scripts and accounts.json) to keep your old logins, then run install.ps1 again."
+    }
 
     # First read and convert the old config in memory: if it is broken we stop here, with nothing changed.
     $newJson = Join-Path $BaseDir 'accounts.json'
@@ -651,6 +690,15 @@ function Move-LegacyInstall {
             $text = $text.Replace($LegacyBlockBegin, $MarkBegin).Replace($LegacyBlockEnd, $MarkEnd)
             Write-TextNoBom $md $text
             $msgs += 'migration: CLAUDE.md block markers renamed'
+        }
+    }
+    # Keep the old folder name working (idempotent: also completes a run that stopped after the rename).
+    if (-not (Test-Path -LiteralPath $LegacyBaseDir)) {
+        try {
+            New-Item -ItemType Junction -Path $LegacyBaseDir -Target $BaseDir -ErrorAction Stop | Out-Null
+            $msgs += "migration: $LegacyBaseDir is now a junction to $BaseDir (paths that Claude saved through the old name keep working)"
+        } catch {
+            $msgs += "migration: WARNING could not create the junction $LegacyBaseDir -> $BaseDir ($($_.Exception.Message)); paths that Claude saved through the old name (plugin registry) will not resolve until it exists: mklink /J `"$LegacyBaseDir`" `"$BaseDir`""
         }
     }
     $msgs

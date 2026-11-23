@@ -108,7 +108,8 @@ Describe 'Move-LegacyInstall' {
         . New-LegacyProfile (Join-Path $TestDrive 'm1')
         Initialize-LegacyFolder $LegacyBaseDir $oldJson
         $msgs = @(Move-LegacyInstall)
-        (Test-Path -LiteralPath $LegacyBaseDir) | Should Be $false
+        # the old name is no longer a real folder (on Windows it is a junction to the new one)
+        ((Test-Path -LiteralPath $LegacyBaseDir) -and -not (Test-LegacyJunction)) | Should Be $false
         (Test-Path -LiteralPath $BaseDir) | Should Be $true
         ([IO.File]::ReadAllBytes((Join-Path $BaseDir 'b\.credentials.json')) -join ',') | Should Be '0,255,254,1,128,10,13,65'
         [IO.File]::ReadAllText((Join-Path $BaseDir 'b\projects\session.jsonl')) | Should Be 'session data'
@@ -133,11 +134,13 @@ Describe 'Move-LegacyInstall' {
         . New-LegacyProfile (Join-Path $TestDrive 'm3')
         Initialize-LegacyFolder $LegacyBaseDir $oldJson
         $null = Move-LegacyInstall
-        foreach ($rel in 'comum.ps1', 'instalar.ps1', 'setup-contas.ps1', 'desfazer-contas.ps1', 'abrir-conta.ps1',
-                         'contas.exemplo.json', 'modelo-CLAUDE.md', 'explorer\claude-aqui.cmd', 'explorer\claude-aqui.ps1',
+        # instalar.ps1, setup-contas.ps1, desfazer-contas.ps1 and abrir-conta.ps1 are not removed: the install
+        # overwrites them with shims that forward to the new scripts
+        foreach ($rel in 'comum.ps1', 'contas.exemplo.json', 'modelo-CLAUDE.md', 'explorer\claude-aqui.cmd', 'explorer\claude-aqui.ps1',
                          'rc\ligado.json', 'rc\desligado.json', 'cc.ps1.desativado') {
             (Test-Path -LiteralPath (Join-Path $BaseDir $rel)) | Should Be $false
         }
+        Test-LegacyInstall | Should Be $false
         [IO.File]::ReadAllText((Join-Path $BaseDir 'my-notes.txt')) | Should Be 'user file'
         [IO.File]::ReadAllText((Join-Path $BaseDir 'rc\mine.json')) | Should Be 'user rc file'
     }
@@ -201,16 +204,27 @@ Describe 'Move-LegacyInstall' {
         (Test-Path -LiteralPath $LegacyBaseDir) | Should Be $false
     }
 
-    It 'does nothing if the new folder already exists' {
+    It 'refuses when both folders exist, even with the old settings.json and CLAUDE.md markers present, and changes nothing' {
         . New-LegacyProfile (Join-Path $TestDrive 'm9')
         Initialize-LegacyFolder $LegacyBaseDir $oldJson
         New-Item -ItemType Directory -Force $BaseDir | Out-Null
         [IO.File]::WriteAllText((Join-Path $BaseDir 'accounts.json'), '{"main":"z","accounts":{}}')
-        $msgs = @(Move-LegacyInstall)
-        $msgs.Count | Should Be 0
+        $settings = '{"statusLine":{"type":"command","command":"x/.claude-contas/statusline.ps1"}}'
+        $claudeMd = "# mine`n<!-- account-switcher:inicio -->`nold`n<!-- account-switcher:fim -->`n"
+        [IO.File]::WriteAllText((Join-Path $MasterDir 'settings.json'), $settings)
+        [IO.File]::WriteAllText((Join-Path $MasterDir 'CLAUDE.md'), $claudeMd)
+        # the old statusLine path and markers make Test-LegacyInstall true: that is the case the guard has to catch
+        Test-LegacyInstall | Should Be $true
+        Test-LegacyBothFolders | Should Be $true
+        $failed = $null
+        try { Move-LegacyInstall | Out-Null } catch { $failed = $_.Exception.Message }
+        $failed | Should Match 'Both .* exist'
+        $failed | Should Match 'nothing was changed'
         (Test-Path -LiteralPath (Join-Path $LegacyBaseDir 'contas.json')) | Should Be $true
         (Test-Path -LiteralPath (Join-Path $LegacyBaseDir 'comum.ps1')) | Should Be $true
         [IO.File]::ReadAllText((Join-Path $BaseDir 'accounts.json')) | Should Be '{"main":"z","accounts":{}}'
+        [IO.File]::ReadAllText((Join-Path $MasterDir 'settings.json')) | Should Be $settings
+        [IO.File]::ReadAllText((Join-Path $MasterDir 'CLAUDE.md')) | Should Be $claudeMd
     }
 
     It 'resumes a run that renamed the folder but stopped before converting' {
@@ -275,6 +289,81 @@ Describe 'Move-LegacyInstall: interrupted and broken installs' {
         $msgs = (Move-LegacyInstall) -join "`n"
         $msgs | Should Match 'WARNING'
         [IO.File]::ReadAllText((Join-Path $MasterDir 'settings.json')) | Should Be '{ not json .claude-contas/statusline.ps1'
+    }
+}
+
+Describe 'Move-LegacyInstall: old folder name keeps working' {
+    AfterAll { $env:USERPROFILE = $realProfile }
+    $onWindows = $env:OS -eq 'Windows_NT'
+
+    It 'leaves a junction under the old name that resolves into the new folder' -Skip:(-not $onWindows) {
+        . New-LegacyProfile (Join-Path $TestDrive 'j1')
+        Initialize-LegacyFolder $LegacyBaseDir $oldJson
+        $msgs = (Move-LegacyInstall) -join "`n"
+        $msgs | Should Match 'junction'
+        Test-LegacyJunction | Should Be $true
+        # a path saved through the old name (what installed_plugins.json holds) still reaches the file
+        [IO.File]::ReadAllText((Join-Path $LegacyBaseDir 'b\projects\session.jsonl')) | Should Be 'session data'
+        # and it is not seen as "both folders exist" nor as something left to migrate
+        Test-LegacyBothFolders | Should Be $false
+        Test-LegacyInstall | Should Be $false
+    }
+
+    It 'creates the junction also when a previous run stopped right after the rename' -Skip:(-not $onWindows) {
+        . New-LegacyProfile (Join-Path $TestDrive 'j2')
+        Initialize-LegacyFolder $BaseDir $oldJson
+        $null = Move-LegacyInstall
+        Test-LegacyJunction | Should Be $true
+    }
+
+    It 'only warns, and does not throw, when the junction cannot be created' {
+        . New-LegacyProfile (Join-Path $TestDrive 'j3')
+        Initialize-LegacyFolder $LegacyBaseDir $oldJson
+        Mock New-Item { throw 'access denied' } -ParameterFilter { $ItemType -eq 'Junction' }
+        $msgs = (Move-LegacyInstall) -join "`n"
+        $msgs | Should Match 'WARNING could not create the junction'
+        (Test-Path -LiteralPath (Join-Path $BaseDir 'accounts.json')) | Should Be $true
+    }
+}
+
+Describe 'Get-RunningClaudeProcesses' {
+    AfterAll { $env:USERPROFILE = $realProfile }
+
+    It 'lists claude processes that are not this script or one of its ancestors' {
+        . New-LegacyProfile (Join-Path $TestDrive 'p1')
+        Mock Get-ParentProcessIds { @(100, 200) }
+        Mock Get-Process { @([pscustomobject]@{ Id = 200 }, [pscustomobject]@{ Id = 300 }) }
+        $found = @(Get-RunningClaudeProcesses)
+        $found.Count | Should Be 1
+        $found[0].Id | Should Be 300
+    }
+
+    It 'is empty when the only claude process is an ancestor (the session that runs the installer)' {
+        . New-LegacyProfile (Join-Path $TestDrive 'p2')
+        Mock Get-ParentProcessIds { @(100, 200) }
+        Mock Get-Process { @([pscustomobject]@{ Id = 200 }) }
+        @(Get-RunningClaudeProcesses).Count | Should Be 0
+    }
+}
+
+Describe 'Shims for the old script names' {
+    $shims = @{ 'abrir-conta.ps1' = 'open-account.ps1'; 'setup-contas.ps1' = 'setup-accounts.ps1'
+                'desfazer-contas.ps1' = 'uninstall.ps1'; 'instalar.ps1' = 'install.ps1' }
+    foreach ($old in $shims.Keys) {
+        It "$old forwards to $($shims[$old])" {
+            $text = [IO.File]::ReadAllText((Join-Path $ScriptsDir $old))
+            $text | Should Match ([regex]::Escape("'$($shims[$old])'"))
+            (Test-Path -LiteralPath (Join-Path $ScriptsDir $shims[$old])) | Should Be $true
+        }
+    }
+    It 'cc still accepts --listar and --contas' {
+        $text = [IO.File]::ReadAllText((Join-Path $ScriptsDir 'cc.ps1'))
+        $text | Should Match "'--listar'"
+        $text | Should Match "'--contas'"
+    }
+    It 'install.ps1 forwards -Verificar as -Check and uninstall -ApagarPastas as -DeleteFolders' {
+        [IO.File]::ReadAllText((Join-Path $ScriptsDir 'instalar.ps1')) | Should Match '-Check:\$Verificar'
+        [IO.File]::ReadAllText((Join-Path $ScriptsDir 'desfazer-contas.ps1')) | Should Match '-DeleteFolders:\$ApagarPastas'
     }
 }
 

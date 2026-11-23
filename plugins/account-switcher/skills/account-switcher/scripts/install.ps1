@@ -13,7 +13,8 @@ $problems = @(); $warnings = @()
 if (-not (Test-Path $Claude)) { $problems += "claude.exe not found (looked on PATH and in $Claude)" }
 
 # The config file to read: the new one, or the old contas.json of an install that is still to be migrated.
-$migrating = Test-LegacyInstall
+$bothFolders = Test-LegacyBothFolders
+$migrating = (Test-LegacyInstall) -and -not $bothFolders
 $cfgFile = Join-Path $BaseDir 'accounts.json'
 $shortcut = 'cc'
 $cfgSource = if (Test-Path $cfgFile) { $cfgFile } elseif ($migrating) { Get-LegacyConfigPath } else { $null }
@@ -28,9 +29,13 @@ if (-not $cfgSource) {
         $problems += "$cfgSource is not valid JSON ($($_.Exception.Message)): fix it and run install.ps1 again"
     }
 }
-if ($migrating) { $warnings += "an older install was found (${LegacyBaseDir}): running install.ps1 without -Check migrates it to $BaseDir. Close every Claude Code session and terminal that uses it first" }
-elseif ((Test-Path -LiteralPath $LegacyBaseDir) -and (Test-Path -LiteralPath $BaseDir)) {
-    $warnings += "both ${LegacyBaseDir} and $BaseDir exist, so nothing is migrated and the accounts in $BaseDir start without logins. To keep your old logins, move or delete $BaseDir (it only holds scripts and accounts.json) and run install.ps1 again"
+if ($migrating) {
+    $warnings += "an older install was found (${LegacyBaseDir}): running install.ps1 without -Check migrates it to $BaseDir and leaves a junction under the old name"
+    $running = @(Get-RunningClaudeProcesses)
+    if ($running) { $problems += "Claude Code is running (PID $($running.Id -join ', ')). Close every Claude Code session except the one running this installer, then run install.ps1 again. Nothing was changed." }
+} elseif ($bothFolders) {
+    $msg = "both ${LegacyBaseDir} and $BaseDir exist, so nothing can be migrated and the accounts in $BaseDir would start without logins. To keep your old logins, move or delete $BaseDir (it should only hold scripts and accounts.json) and run install.ps1 again"
+    if (Test-LegacyInstall) { $problems += $msg } else { $warnings += $msg }
 }
 
 $tmp = Join-Path $env:TEMP ("mc-linktest-" + [guid]::NewGuid())
@@ -112,5 +117,6 @@ Write-Host "Explorer: type '$shortcut' or '$shortcut <account>' in the address b
 
 # Things the migration cannot safely rewrite: tell the user instead of guessing.
 foreach ($f in @(Find-LegacyPathReferences)) {
-    Write-Host "WARNING: $f still mentions .claude-contas (for example a plugin install path). Check it by hand if something stops working." -ForegroundColor Yellow
+    if (Test-LegacyJunction) { Write-Host "note: $f mentions .claude-contas; it keeps working through the junction." }
+    else { Write-Host "WARNING: $f still mentions .claude-contas (for example a plugin install path). Check it by hand if something stops working." -ForegroundColor Yellow }
 }

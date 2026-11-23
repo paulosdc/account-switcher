@@ -81,7 +81,7 @@ Describe 'Clear-ParentSessionEnv outside CLAUDE*' {
         $err | Should BeNullOrEmpty
     }
 
-    It 'outside a Claude session, keeps NO_COLOR (cc typed in the user's own shell)' {
+    It 'outside a Claude session, keeps NO_COLOR (cc typed in the user own shell)' {
         $antes, $cc = $env:NO_COLOR, $env:CLAUDECODE
         try {
             Remove-Item Env:CLAUDECODE -ErrorAction SilentlyContinue

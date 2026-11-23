@@ -17,6 +17,13 @@ foreach ($c in $cfg.Accounts) {
     }
 }
 
+# The old folder name is only a link to the new folder: it goes with the account folders. Without
+# -DeleteFolders the folders stay, and so does the link that keeps Claude's saved plugin paths working.
+if (Test-LegacyJunction) {
+    if ($DeleteFolders) { [IO.Directory]::Delete($LegacyBaseDir, $false); Write-Host "junction $LegacyBaseDir removed" }
+    else { Write-Host "junction $LegacyBaseDir kept (the account folders are still there; -DeleteFolders removes it)" }
+}
+
 $bin = Join-Path $BaseDir 'bin'
 $path = [Environment]::GetEnvironmentVariable('Path', 'User')
 [Environment]::SetEnvironmentVariable('Path', ((($path -split ';') | Where-Object { $_ -and $_ -ne $bin }) -join ';'), 'User')

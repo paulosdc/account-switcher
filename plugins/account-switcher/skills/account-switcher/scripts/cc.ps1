@@ -7,7 +7,7 @@ $null = Clear-ParentSessionEnv
 $cfg = Get-Accounts
 $rest = @($args)
 
-if ($rest.Count -and $rest[0] -in '-l', '--list') {
+if ($rest.Count -and $rest[0] -in '-l', '--list', '--listar', '--contas') {
     $(foreach ($c in $cfg.Accounts) {
         $s = if (Test-Path -LiteralPath $c.Dir) { Get-AccountStatus $c } else { $null }
         $loggedIn = if (-not $s) { 'folder not created (run setup-accounts.ps1)' }
