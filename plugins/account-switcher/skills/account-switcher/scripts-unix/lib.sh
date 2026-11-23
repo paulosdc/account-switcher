@@ -154,6 +154,31 @@ EOF
     validate_accounts
 }
 
+# physical_path path : the real path (symlinks resolved) of the nearest existing ancestor plus the part that
+# does not exist yet. Lets us notice that two spellings of a path (a symlink, a real path behind a symlinked
+# home) are the same folder.
+physical_path() {
+    local p=$1 rest='' base
+    while [ ! -e "$p" ] && [ "$p" != / ] && [ -n "$p" ]; do rest="/${p##*/}$rest"; p=${p%/*}; done
+    [ -n "$p" ] || p=/
+    base=$(cd "$p" 2>/dev/null && pwd -P) || return 1
+    [ "$base" = / ] && base=''
+    printf '%s%s' "$base" "$rest"
+}
+
+# Is $1 the master folder, or inside it, by any spelling? -ef compares the real files, so it also catches
+# ~/.Claude on a case-insensitive macOS volume.
+reaches_master() {
+    local dir=$1 real master
+    [ "$dir" = "$MASTER_DIR" ] && return 0
+    [ -e "$dir" ] && [ "$dir" -ef "$MASTER_DIR" ] && return 0
+    real=$(physical_path "$dir") || return 1
+    master=$(physical_path "$MASTER_DIR") || return 1
+    [ "$real" = "$master" ] && return 0
+    case "$real" in "$master"/*) return 0 ;; esac
+    return 1
+}
+
 # Rejects configurations that would make a script act on the wrong folder or on a missing account.
 validate_accounts() {
     local i j dir
@@ -167,7 +192,17 @@ validate_accounts() {
                 /|"$HOME"|"$MASTER_DIR"/*)
                     msg_red "Invalid dir for account '${ACC_NAME[$i]}': $dir (it must be its own folder, not your home, / or inside ~/.claude)"
                     return 1 ;;
+                "$BASE_DIR"|"$BASE_DIR"/bin|"$BASE_DIR"/bin/*|"$BASE_DIR"/rc|"$BASE_DIR"/rc/*|"$BASE_DIR"/backups|"$BASE_DIR"/backups/*)
+                    msg_red "Invalid dir for account '${ACC_NAME[$i]}': $dir (it would collide with a folder the scripts own inside ~/.claude-accounts)"
+                    return 1 ;;
             esac
+            # A different spelling of the master folder (symlink, ~/.Claude on a case-insensitive volume, a
+            # real path behind a symlinked home) must not become a secondary account: the links would point
+            # to themselves and the real settings.json and projects/ would be moved to backups.
+            if reaches_master "$dir"; then
+                msg_red "Invalid dir for account '${ACC_NAME[$i]}': $dir (it is the same folder as ~/.claude or inside it; only the main account may use ~/.claude)"
+                return 1
+            fi
         fi
         for j in "${!ACC_NAME[@]}"; do
             [ "$j" -lt "$i" ] && [ "${ACC_DIR[$j]}" = "$dir" ] && {
@@ -678,6 +713,12 @@ update_claude_md() {
         new=$block
     fi
     printf '%s\n' "$new" > "$md"
+}
+
+claude_md_has_block() {
+    local md="$MASTER_DIR/CLAUDE.md"
+    [ -f "$md" ] || return 1
+    block_bounds "$(cat "$md")"
 }
 
 remove_claude_md_block() {

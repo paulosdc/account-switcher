@@ -98,7 +98,7 @@ The same idea for macOS and Linux, written in bash (it runs on the bash 3.2 that
 
 **Use:** `cca <account>` opens Claude in that account (`cca` alone opens the default), `cca -l` lists the accounts, `--rc` / `--no-rc` change Remote Control for that session only. Everything after the account name goes to `claude`. Maintenance (`setup-accounts.sh` after adding an account, `install.sh` after updating the plugin, `uninstall.sh [--delete-folders]`) is described in [`SKILL.md`](plugins/account-switcher/skills/account-switcher/SKILL.md).
 
-**Safety:** it never touches the Keychain or any credentials file; the usage token (Linux) is read in memory and handed to `curl` through stdin, so it does not show up in `ps`; `settings.json` and `CLAUDE.md` are edited in place with text insertions (your formatting and symlinks are kept) and are not written at all if the JSON is already broken; `uninstall.sh` removes only links that point into `~/.claude`.
+**Safety:** it never touches the Keychain or any credentials file; the usage token (Linux) is read in memory and handed to `curl` through stdin, so it does not show up in `ps`; `settings.json` and `CLAUDE.md` are edited in place with text insertions (your formatting and symlinks are kept) and are not written at all if the JSON is already broken; `uninstall.sh` removes only links that point into `~/.claude`. It leaves `~/.claude-accounts` itself and, on macOS, the Keychain logins of the extra accounts in place.
 
 **Tests:** `bash tests/unix/run.sh` (no framework, no network, a fake `HOME` per test file, so your `~/.claude` is never touched). They pass on macOS (bash 3.2) and on Debian (bash 5.2, GNU `date`, `jq` 1.6).
 

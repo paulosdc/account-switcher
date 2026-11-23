@@ -36,11 +36,11 @@ for name in "${ACC_NAME[@]}"; do
 done
 
 remove_path_block
-remove_claude_md_block
-echo 'CLAUDE.md: accounts block removed'
+if claude_md_has_block; then remove_claude_md_block; echo 'CLAUDE.md: accounts block removed'; else echo 'CLAUDE.md: no accounts block found, nothing to remove'; fi
 
 # The statusLine goes only if it is ours; remoteControlAtStartup false stays (safe without cc).
 line=$(unregister_statusline); [ -n "$line" ] && echo "$line"
 
+echo "Left in place: $BASE_DIR itself (accounts.json, backups, scripts) and, on macOS, the Keychain logins of the extra accounts (remove them in Keychain Access if you want)."
 if [ -f "$BASE_DIR/cc.sh" ]; then mv -- "$BASE_DIR/cc.sh" "$BASE_DIR/cc.sh.disabled"; echo 'command disabled (cc.sh.disabled); install.sh enables it again'; fi
 exit 0

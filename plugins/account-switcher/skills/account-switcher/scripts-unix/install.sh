@@ -3,7 +3,7 @@
 # Copies the scripts of this folder to ~/.claude-accounts, takes a backup the first time, creates the accounts
 # (setup-accounts.sh), puts the command on PATH and updates the global CLAUDE.md.
 # Prerequisite: ~/.claude-accounts/accounts.json already written (see accounts.example.json).
-# --check:   only checks the environment and lists conflicts, changing nothing.
+# --check:   only checks the environment and lists conflicts, changing nothing. Exits 1 if it finds a PROBLEM.
 # --no-path: does not edit the shell startup files (you add ~/.claude-accounts/bin to PATH yourself).
 SOURCE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$SOURCE/lib.sh" || exit 1
@@ -47,7 +47,7 @@ echo "claude: $CLAUDE"
 echo "command: ${CFG_COMMAND:-cca}"
 for w in "${warnings[@]}"; do msg_yellow "WARNING: $w"; done
 for p in "${problems[@]}"; do msg_red "PROBLEM: $p"; done
-[ "$check_only" = 1 ] && exit 0
+if [ "$check_only" = 1 ]; then [ ${#problems[@]} -eq 0 ] && exit 0; exit 1; fi
 if [ ${#problems[@]} -gt 0 ]; then msg_red 'Fix the problems above before installing.'; exit 1; fi
 
 # ---- backup (first installation only) ----

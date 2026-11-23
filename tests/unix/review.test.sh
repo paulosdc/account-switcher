@@ -21,6 +21,43 @@ bad '{"main":"m","default":"ghost","accounts":{"m":{"email":"m@x"}}}'
 bad '{"main":"m","publish":"ghost","accounts":{"m":{"email":"m@x"}}}'
 bad '{"main":"m","chrome":"ghost","accounts":{"m":{"email":"m@x"}}}'
 
+# a dir that reaches ~/.claude another way (symlink, symlinked home) is the master folder, not an account
+fresh_home l; ln -s "$HOME/.claude" "$HOME/via-link"
+write_accounts '{"main":"m","accounts":{"m":{"email":"m@x"},"s":{"email":"s@x","dir":"~/via-link"}}}'; . "$SCRIPTS_DIR/lib.sh"
+assert_fails load_accounts
+write_accounts '{"main":"m","accounts":{"m":{"email":"m@x"},"s":{"email":"s@x","dir":"~/via-link/sub"}}}'; assert_fails load_accounts
+# the same, with a symlinked home (HOME is a link to the real folder)
+realhome=$HOME; ln -s "$realhome" "$realhome/../home-link-$$" 2>/dev/null
+HOME_SAVE=$HOME; export HOME="$realhome/../home-link-$$"; mkdir -p "$realhome/.claude-accounts"
+write_accounts '{"main":"m","accounts":{"m":{"email":"m@x"},"s":{"email":"s@x","dir":"'"$realhome"'/.claude"}}}'
+. "$SCRIPTS_DIR/lib.sh"; assert_fails load_accounts
+rm -f "$HOME"; export HOME=$HOME_SAVE; . "$SCRIPTS_DIR/lib.sh"
+# and sync_account_links never touches the master folder if such an account got through
+fresh_home m2; echo real > "$HOME/.claude/settings.json"; mkdir -p "$HOME/.claude/projects"
+ln -s "$HOME/.claude" "$HOME/via-link2"
+write_accounts '{"main":"m","accounts":{"m":{"email":"m@x"},"s":{"email":"s@x","dir":"~/via-link2"}}}'; stub_claude
+bash "$SCRIPTS_DIR/setup-accounts.sh" >/dev/null 2>&1; status=$?; assert_eq 1 "$status" 'setup refuses'
+assert_eq real "$(cat "$HOME/.claude/settings.json")" 'master settings.json untouched'
+assert_eq 0 "$([ -L "$HOME/.claude/settings.json" ] && echo 1 || echo 0)" 'settings.json is not a self link'
+assert_eq 1 "$([ -d "$HOME/.claude/projects" ] && [ ! -L "$HOME/.claude/projects" ] && echo 1 || echo 0)" 'projects/ still a real folder'
+
+# a custom dir on a folder the scripts own is rejected (uninstall --delete-folders would delete it)
+for owned in backups bin rc backups/x; do
+    bad "{\"main\":\"m\",\"accounts\":{\"m\":{\"email\":\"m@x\"},\"s\":{\"email\":\"s@x\",\"dir\":\"~/.claude-accounts/$owned\"}}}"
+done
+
+# install.sh --check exits 1 when it prints a PROBLEM
+fresh_home ck; export SHELL=/bin/zsh
+bash "$SCRIPTS_DIR/install.sh" --check >/dev/null 2>&1; assert_eq 1 "$?" '--check with a problem (no accounts.json) exits 1'
+write_accounts '{"main":"m","accounts":{"m":{"email":"m@x"}}}'; stub_claude
+bash "$SCRIPTS_DIR/install.sh" --check >/dev/null 2>&1; assert_eq 0 "$?" '--check without problems exits 0'
+
+# uninstall: says so when there was no accounts block, and lists what it leaves behind
+out=$(bash "$SCRIPTS_DIR/uninstall.sh" 2>&1)
+assert_contains "$out" 'no accounts block found' 'no block: does not claim to have removed it'
+assert_contains "$out" 'Keychain' 'mentions what is left behind'
+. "$SCRIPTS_DIR/lib.sh"      # BASE_DIR follows the fake HOME of the next tests
+
 # an e-mail with a newline cannot split a record into a phantom account
 write_accounts '{"main":"m","accounts":{"m":{"email":"a@x\nphantom\u001fb"}}}'; assert_ok load_accounts
 assert_eq 1 "${#ACC_NAME[@]}" 'newline in e-mail: still one account'

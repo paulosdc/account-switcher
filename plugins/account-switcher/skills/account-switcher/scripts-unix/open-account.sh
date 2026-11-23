@@ -51,11 +51,19 @@ elif [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
     for term in x-terminal-emulator gnome-terminal konsole xfce4-terminal kitty alacritty xterm; do
         command -v "$term" >/dev/null 2>&1 || continue
         case "$term" in
-            gnome-terminal) "$term" -- bash "$launcher" ;;
-            xfce4-terminal) "$term" -x bash "$launcher" ;;
-            kitty) "$term" bash "$launcher" ;;
-            *) "$term" -e bash "$launcher" ;;
-        esac && { opened=1; break; }
+            gnome-terminal) targs=(-- bash "$launcher") ;;
+            xfce4-terminal) targs=(-x bash "$launcher") ;;
+            kitty) targs=(bash "$launcher") ;;
+            *) targs=(-e bash "$launcher") ;;
+        esac
+        # xterm, konsole, kitty and alacritty stay in the foreground until the window closes, which would
+        # block the calling session. Run every emulator in the background; if it died at once with an
+        # error, try the next one.
+        "$term" "${targs[@]}" >/dev/null 2>&1 </dev/null &
+        pid=$!
+        sleep 0.3
+        if kill -0 "$pid" 2>/dev/null; then opened=1; disown "$pid" 2>/dev/null; break; fi
+        wait "$pid" && { opened=1; break; }
     done
 fi
 if [ "$opened" != 1 ]; then

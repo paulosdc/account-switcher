@@ -41,6 +41,17 @@ rm -f "$HOME/tmux-args.log"
 FAKE_OS=Linux TMUX=/tmp/x,1,0 $OPEN s "$HOME/work dir" --no-rc >/dev/null 2>&1; assert_eq 0 "$?" 'tmux: succeeds'
 assert_contains "$(cat "$HOME/tmux-args.log")" "new-window -c $HOME/work dir" 'tmux window in the folder'
 
+# Linux with a terminal emulator that stays in the foreground (xterm): the caller must not block
+cat > "$HOME/stubs/xterm" <<'STUB'
+#!/bin/sh
+echo "$@" > "$HOME/xterm-args.log"; sleep 5
+STUB
+chmod +x "$HOME/stubs/xterm"
+start=$(date +%s)
+FAKE_OS=Linux DISPLAY=:0 TMUX= PATH="$HOME/stubs:/usr/bin:/bin" $OPEN s "$HOME" >/dev/null 2>&1; assert_eq 0 "$?" 'xterm: succeeds'
+assert_eq 1 "$(( $(date +%s) - start < 4 ))" 'foreground terminal does not block the caller'
+pkill -f "$HOME/stubs/xterm" 2>/dev/null; rm -f "$HOME/stubs/xterm"
+
 # Linux without a display or tmux: clear failure and no leftover launcher
 before=$(ls "${TMPDIR:-/tmp}" | grep -c '^open-account\.' || true)
 out=$(FAKE_OS=Linux DISPLAY= WAYLAND_DISPLAY= TMUX= $OPEN s "$HOME" 2>&1); status=$?
